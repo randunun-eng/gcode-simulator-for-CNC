@@ -1,0 +1,18 @@
+{
+    "name": "gcode-simulator",
+    "version": "1.0.0",
+    "description": "G-code simulator with AI assistant",
+    "main": "index.html",
+    "scripts": {
+        "start": "python3 -m http.server 8080",
+        "deploy": "cd worker && wrangler deploy"
+    },
+    "keywords": [
+        "gcode",
+        "cnc",
+        "simulator",
+        "ai"
+    ],
+    "author": "",
+    "license": "MIT"
+}
