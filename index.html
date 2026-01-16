@@ -66,7 +66,29 @@
                     <label for="filenameInput">Filename:</label>
                     <input type="text" id="filenameInput" value="my_gcode.gcode" placeholder="Enter filename...">
                 </div>
-                <textarea id="gcodeInput" placeholder="Paste your G-code here or load a file..."></textarea>
+                <!-- Interactive G-code Editor with Line Comments -->
+                <div class="gcode-editor" id="gcodeEditor">
+                    <div class="editor-lines" id="editorLines">
+                        <!-- Lines will be populated by JS -->
+                    </div>
+                </div>
+                <textarea id="gcodeInput" style="display:none;"></textarea>
+                <!-- Line Edit Modal -->
+                <div class="line-edit-modal" id="lineEditModal" style="display:none;">
+                    <div class="modal-header">
+                        <span>Edit Line <span id="editLineNum">1</span></span>
+                        <button class="modal-close" id="modalClose">×</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="original-line" id="originalLine"></div>
+                        <input type="text" id="lineEditInput"
+                            placeholder="e.g., 'move to 100,50' or 'speed 600' or 'delete'">
+                        <div class="modal-actions">
+                            <button class="btn btn-primary" id="applyLineEdit">Apply AI Edit</button>
+                            <button class="btn btn-secondary" id="cancelLineEdit">Cancel</button>
+                        </div>
+                    </div>
+                </div>
                 <input type="file" id="fileInput" accept=".gcode,.nc,.ngc,.txt" hidden>
                 <input type="file" id="dxfFileInput" accept=".dxf" hidden>
             </aside>

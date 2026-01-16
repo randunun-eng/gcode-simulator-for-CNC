@@ -1023,10 +1023,203 @@ M30         ; Program end
             this.offerGcodeApplication(gcodeMatch[1]);
         }
     }
+
+    // ===== Interactive Editor =====
+
+    initEditor() {
+        this.editorLines = document.getElementById('editorLines');
+        this.lineEditModal = document.getElementById('lineEditModal');
+        this.editLineNum = document.getElementById('editLineNum');
+        this.originalLine = document.getElementById('originalLine');
+        this.lineEditInput = document.getElementById('lineEditInput');
+        this.currentEditLine = null;
+
+        // Modal buttons
+        document.getElementById('applyLineEdit').addEventListener('click', () => this.applyLineEdit());
+        document.getElementById('cancelLineEdit').addEventListener('click', () => this.closeLineEditModal());
+        document.getElementById('modalClose').addEventListener('click', () => this.closeLineEditModal());
+
+        // Sync textarea changes to editor
+        document.getElementById('gcodeInput').addEventListener('input', () => this.renderEditor());
+
+        // Initial render
+        this.renderEditor();
+    }
+
+    renderEditor() {
+        const gcode = document.getElementById('gcodeInput').value;
+        const lines = gcode.split('\n');
+
+        this.editorLines.innerHTML = '';
+
+        if (lines.length === 1 && lines[0] === '') {
+            // Show placeholder
+            const placeholder = document.createElement('div');
+            placeholder.className = 'editor-line';
+            placeholder.innerHTML = `
+                <span class="line-number">1</span>
+                <span class="line-content" style="color: var(--text-muted);">Click chat to generate G-code, or paste here...</span>
+            `;
+            this.editorLines.appendChild(placeholder);
+            return;
+        }
+
+        lines.forEach((line, index) => {
+            const lineDiv = document.createElement('div');
+            lineDiv.className = 'editor-line';
+            lineDiv.dataset.lineNum = index;
+
+            // Syntax highlight
+            const highlighted = this.highlightGcode(line);
+
+            lineDiv.innerHTML = `
+                <span class="line-number">${index + 1}</span>
+                <span class="line-content">${highlighted}</span>
+                <button class="line-edit-btn" title="Edit this line">✏️</button>
+            `;
+
+            // Click to edit
+            lineDiv.querySelector('.line-edit-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.openLineEditModal(index, line);
+            });
+
+            // Double-click whole line
+            lineDiv.addEventListener('dblclick', () => {
+                this.openLineEditModal(index, line);
+            });
+
+            this.editorLines.appendChild(lineDiv);
+        });
+    }
+
+    highlightGcode(line) {
+        // Comment
+        if (line.trim().startsWith(';') || line.trim().startsWith('(')) {
+            return `<span class="gcode-comment">${this.escapeHtml(line)}</span>`;
+        }
+
+        // Highlight G/M commands and parameters
+        return this.escapeHtml(line)
+            .replace(/\b(G\d+|M\d+)/gi, '<span class="gcode-cmd">$1</span>')
+            .replace(/([XYZIJKFSR])(-?\d+\.?\d*)/gi, '<span class="gcode-param">$1$2</span>');
+    }
+
+    escapeHtml(text) {
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    openLineEditModal(lineNum, lineContent) {
+        this.currentEditLine = lineNum;
+        this.editLineNum.textContent = lineNum + 1;
+        this.originalLine.textContent = lineContent || '(empty line)';
+        this.lineEditInput.value = '';
+        this.lineEditInput.placeholder = "'move to 100,50' or 'speed 600' or 'delete'";
+        this.lineEditModal.style.display = 'block';
+        this.lineEditInput.focus();
+    }
+
+    closeLineEditModal() {
+        this.lineEditModal.style.display = 'none';
+        this.currentEditLine = null;
+    }
+
+    async applyLineEdit() {
+        const instruction = this.lineEditInput.value.trim();
+        if (!instruction) return;
+
+        const textarea = document.getElementById('gcodeInput');
+        const lines = textarea.value.split('\n');
+        const originalLine = lines[this.currentEditLine];
+
+        // Handle delete
+        if (instruction.toLowerCase() === 'delete') {
+            lines.splice(this.currentEditLine, 1);
+            textarea.value = lines.join('\n');
+            this.renderEditor();
+            this.parseGcode();
+            this.closeLineEditModal();
+            return;
+        }
+
+        // Process with CAG
+        const newLine = this.processLineEdit(originalLine, instruction);
+
+        lines[this.currentEditLine] = newLine;
+        textarea.value = lines.join('\n');
+        this.renderEditor();
+        this.parseGcode();
+        this.closeLineEditModal();
+
+        // Add feedback in chat
+        this.addChatMessage(`Line ${this.currentEditLine + 1} updated:\n\`${originalLine}\` → \`${newLine}\``, 'assistant');
+    }
+
+    processLineEdit(originalLine, instruction) {
+        const lower = instruction.toLowerCase();
+
+        // Move to position
+        const posMatch = lower.match(/(?:move\s*to|position|goto)\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/i);
+        if (posMatch) {
+            const x = posMatch[1];
+            const y = posMatch[2];
+            // Preserve the G command type
+            const gType = originalLine.match(/G[01]/i)?.[0] || 'G1';
+            const fRate = originalLine.match(/F\d+/i)?.[0] || 'F400';
+            return `${gType} X${x} Y${y} ${fRate}`;
+        }
+
+        // Change speed/feed rate
+        const speedMatch = lower.match(/(?:speed|feed|f)\s*(\d+)/i);
+        if (speedMatch) {
+            const newFeed = speedMatch[1];
+            if (originalLine.match(/F\d+/i)) {
+                return originalLine.replace(/F\d+/gi, `F${newFeed}`);
+            } else {
+                return originalLine.trim() + ` F${newFeed}`;
+            }
+        }
+
+        // Change X
+        const xMatch = lower.match(/x\s*=?\s*(\d+(?:\.\d+)?)/i);
+        if (xMatch) {
+            return originalLine.replace(/X-?\d+\.?\d*/gi, `X${xMatch[1]}`);
+        }
+
+        // Change Y
+        const yMatch = lower.match(/y\s*=?\s*(\d+(?:\.\d+)?)/i);
+        if (yMatch) {
+            return originalLine.replace(/Y-?\d+\.?\d*/gi, `Y${yMatch[1]}`);
+        }
+
+        // Change Z
+        const zMatch = lower.match(/z\s*=?\s*(-?\d+(?:\.\d+)?)/i);
+        if (zMatch) {
+            return originalLine.replace(/Z-?\d+\.?\d*/gi, `Z${zMatch[1]}`);
+        }
+
+        // Pen up / pen down
+        if (lower.includes('pen up') || lower.includes('up')) {
+            return originalLine.replace(/Z-?\d+\.?\d*/gi, 'Z5');
+        }
+        if (lower.includes('pen down') || lower.includes('down')) {
+            return originalLine.replace(/Z-?\d+\.?\d*/gi, 'Z-1');
+        }
+
+        // Add comment
+        if (lower.startsWith('comment')) {
+            const comment = instruction.replace(/^comment\s*/i, '');
+            return originalLine + ` ; ${comment}`;
+        }
+
+        // If no pattern matched, just append as comment
+        return originalLine + ` ; ${instruction}`;
+    }
 }
 
 // Initialize simulator when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     window.simulator = new GCodeSimulator();
     window.simulator.initChat();
+    window.simulator.initEditor();
 });
