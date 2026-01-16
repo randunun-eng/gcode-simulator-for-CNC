@@ -898,11 +898,8 @@ M30         ; Program end
             this.chatPanel.classList.toggle('collapsed');
         });
 
-        // Send message
+        // Send message - only on button click, not Enter key
         this.chatSendBtn.addEventListener('click', () => this.sendChatMessage());
-        this.chatInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.sendChatMessage();
-        });
     }
 
     async sendChatMessage() {
