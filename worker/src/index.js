@@ -1,181 +1,142 @@
 /**
- * G-code AI Assistant - Cloudflare Worker with CAG (Cache-Augmented Generation)
+ * G-code AI Assistant - SIMPLIFIED
  * 
- * Conversational Mode: Asks clarifying questions instead of assuming/hallucinating
+ * Design: Use sensible defaults, generate G-code immediately, minimal questions
  */
 
-// ===== CAG Knowledge Base (Cached G-code Patterns) =====
-const GCODE_CACHE = {
-    circle: (x, y, r) => `G21
+// ===== G-code Generators =====
+const GCODE = {
+    circle: (x = 50, y = 50, r = 20) => `G21
 G90
-G0 Z5           ; Pen up
+G0 Z5
 G0 X${(parseFloat(x) + parseFloat(r)).toFixed(2)} Y${parseFloat(y).toFixed(2)}
-G0 Z-1          ; Pen down
+G0 Z-1
 ${Array.from({ length: 36 }, (_, i) => {
         const angle = ((i + 1) / 36) * 2 * Math.PI;
         return `G1 X${(parseFloat(x) + parseFloat(r) * Math.cos(angle)).toFixed(2)} Y${(parseFloat(y) + parseFloat(r) * Math.sin(angle)).toFixed(2)} F400`;
     }).join('\n')}
-G0 Z5           ; Pen up`,
+G0 Z5
+G0 X0 Y0`,
 
-    rectangle: (x, y, w, h) => `G21
+    rectangle: (x = 0, y = 0, w = 50, h = 30) => `G21
 G90
-G0 Z5           ; Pen up
+G0 Z5
 G0 X${parseFloat(x).toFixed(2)} Y${parseFloat(y).toFixed(2)}
-G0 Z-1          ; Pen down
+G0 Z-1
 G1 X${(parseFloat(x) + parseFloat(w)).toFixed(2)} Y${parseFloat(y).toFixed(2)} F400
 G1 X${(parseFloat(x) + parseFloat(w)).toFixed(2)} Y${(parseFloat(y) + parseFloat(h)).toFixed(2)} F400
 G1 X${parseFloat(x).toFixed(2)} Y${(parseFloat(y) + parseFloat(h)).toFixed(2)} F400
 G1 X${parseFloat(x).toFixed(2)} Y${parseFloat(y).toFixed(2)} F400
-G0 Z5           ; Pen up`,
+G0 Z5
+G0 X0 Y0`,
 
-    square: (x, y, size) => `G21
+    square: (x = 0, y = 0, size = 40) => `G21
 G90
-G0 Z5           ; Pen up
+G0 Z5
 G0 X${parseFloat(x).toFixed(2)} Y${parseFloat(y).toFixed(2)}
-G0 Z-1          ; Pen down
+G0 Z-1
 G1 X${(parseFloat(x) + parseFloat(size)).toFixed(2)} Y${parseFloat(y).toFixed(2)} F400
 G1 X${(parseFloat(x) + parseFloat(size)).toFixed(2)} Y${(parseFloat(y) + parseFloat(size)).toFixed(2)} F400
 G1 X${parseFloat(x).toFixed(2)} Y${(parseFloat(y) + parseFloat(size)).toFixed(2)} F400
 G1 X${parseFloat(x).toFixed(2)} Y${parseFloat(y).toFixed(2)} F400
-G0 Z5           ; Pen up`,
+G0 Z5
+G0 X0 Y0`,
 
-    line: (x1, y1, x2, y2) => `G21
+    line: (x1 = 0, y1 = 0, x2 = 50, y2 = 50) => `G21
 G90
-G0 Z5           ; Pen up
+G0 Z5
 G0 X${parseFloat(x1).toFixed(2)} Y${parseFloat(y1).toFixed(2)}
-G0 Z-1          ; Pen down
+G0 Z-1
 G1 X${parseFloat(x2).toFixed(2)} Y${parseFloat(y2).toFixed(2)} F400
-G0 Z5           ; Pen up`
+G0 Z5
+G0 X0 Y0`
 };
 
-// G-code command explanations
-const GCODE_EXPLANATIONS = {
-    'g0': '**G0** = Rapid positioning (non-cutting). Tool moves quickly without cutting.',
-    'g1': '**G1** = Linear move (cutting). Tool moves in a straight line while cutting/drawing.',
-    'g21': '**G21** = Set units to millimeters.',
-    'g90': '**G90** = Absolute positioning. Coordinates relative to origin.',
-    'f': '**F** = Feed rate in mm/min.',
-    'z': '**Z** = Z-axis. Positive = up (pen up), Negative = down (cutting).'
-};
-
-// Conversational pattern matching - asks clarifying questions
-function matchCachedPattern(message) {
+// Simple pattern matching - generates G-code with defaults
+function processMessage(message) {
     const lower = message.toLowerCase();
 
     // ===== CIRCLE =====
-    if (lower.includes('circle')) {
-        // Check if all parameters provided
-        const posMatch = lower.match(/(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/);
+    if (lower.includes('circle') || lower.includes('circul')) {
+        // Extract radius - support cm and mm
+        let radius = 20; // default
+        const cmMatch = lower.match(/(\d+(?:\.\d+)?)\s*cm/i);
+        const mmMatch = lower.match(/(\d+(?:\.\d+)?)\s*mm/i);
         const radiusMatch = lower.match(/radius\s*(\d+(?:\.\d+)?)/i) || lower.match(/r\s*=?\s*(\d+(?:\.\d+)?)/i);
 
-        if (posMatch && radiusMatch) {
-            // All info provided - generate G-code
-            const [, x, y] = posMatch;
-            const r = radiusMatch[1];
-            return {
-                type: 'gcode',
-                response: `Here's a circle at (${x}, ${y}) with radius ${r}mm:\n\n\`\`\`gcode\n${GCODE_CACHE.circle(x, y, r)}\n\`\`\``
-            };
-        } else if (radiusMatch && !posMatch) {
-            // Has radius but no position - ask for position
-            return {
-                type: 'clarify',
-                response: `I can create a circle with radius ${radiusMatch[1]}mm.\n\n**Where should I place it?** Please provide the center position (X, Y coordinates in mm).`
-            };
-        } else if (posMatch && !radiusMatch) {
-            // Has position but no radius - ask for radius
-            return {
-                type: 'clarify',
-                response: `I can create a circle at position (${posMatch[1]}, ${posMatch[2]}).\n\n**What radius?** Please specify the radius in mm.`
-            };
-        } else {
-            // No parameters - ask for all
-            return {
-                type: 'clarify',
-                response: `I can create a circle for you!\n\n**Please provide:**\n1. Center position (X, Y) in mm\n2. Radius in mm\n\nExample: "circle at 50,50 radius 20"`
-            };
+        if (cmMatch) {
+            radius = parseFloat(cmMatch[1]) * 10; // convert cm to mm
+        } else if (mmMatch) {
+            radius = parseFloat(mmMatch[1]);
+        } else if (radiusMatch) {
+            radius = parseFloat(radiusMatch[1]);
         }
+
+        // Extract position if provided
+        let x = 50, y = 50; // default center
+        const posMatch = lower.match(/at\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/i);
+        if (posMatch) {
+            x = parseFloat(posMatch[1]);
+            y = parseFloat(posMatch[2]);
+        }
+
+        return {
+            response: `Circle created! Radius: ${radius}mm, Center: (${x}, ${y})\n\n\`\`\`gcode\n${GCODE.circle(x, y, radius)}\n\`\`\``
+        };
     }
 
     // ===== RECTANGLE =====
     if (lower.includes('rectangle') || lower.includes('rect')) {
+        let w = 50, h = 30;
         const sizeMatch = lower.match(/(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)/i);
-        const posMatch = lower.match(/at\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/i);
-
         if (sizeMatch) {
-            const [, w, h] = sizeMatch;
-            const x = posMatch ? posMatch[1] : '0';
-            const y = posMatch ? posMatch[2] : '0';
-            return {
-                type: 'gcode',
-                response: `Here's a ${w}×${h}mm rectangle at (${x}, ${y}):\n\n\`\`\`gcode\n${GCODE_CACHE.rectangle(x, y, w, h)}\n\`\`\``
-            };
-        } else {
-            return {
-                type: 'clarify',
-                response: `I can create a rectangle for you!\n\n**Please provide:**\n1. Width and height (e.g., "50x30")\n2. Optionally, position (e.g., "at 10,10")\n\nExample: "rectangle 50x30 at 10,10"`
-            };
+            w = parseFloat(sizeMatch[1]);
+            h = parseFloat(sizeMatch[2]);
         }
+
+        return {
+            response: `Rectangle created! Size: ${w}×${h}mm\n\n\`\`\`gcode\n${GCODE.rectangle(0, 0, w, h)}\n\`\`\``
+        };
     }
 
     // ===== SQUARE =====
     if (lower.includes('square')) {
-        const sizeMatch = lower.match(/(\d+(?:\.\d+)?)\s*mm/i) || lower.match(/size\s*(\d+(?:\.\d+)?)/i);
-
+        let size = 40;
+        const sizeMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:mm|cm)?/i);
         if (sizeMatch) {
-            return {
-                type: 'gcode',
-                response: `Here's a ${sizeMatch[1]}mm square:\n\n\`\`\`gcode\n${GCODE_CACHE.square(0, 0, sizeMatch[1])}\n\`\`\``
-            };
-        } else {
-            return {
-                type: 'clarify',
-                response: `I can create a square for you!\n\n**What size?** Please specify the side length in mm.\n\nExample: "square 40mm"`
-            };
+            size = parseFloat(sizeMatch[1]);
+            if (lower.includes('cm')) size *= 10;
         }
+
+        return {
+            response: `Square created! Size: ${size}mm\n\n\`\`\`gcode\n${GCODE.square(0, 0, size)}\n\`\`\``
+        };
     }
 
     // ===== LINE =====
     if (lower.includes('line')) {
+        let x1 = 0, y1 = 0, x2 = 50, y2 = 50;
         const fromMatch = lower.match(/from\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/i);
         const toMatch = lower.match(/to\s*(\d+(?:\.\d+)?)\s*[,\s]\s*(\d+(?:\.\d+)?)/i);
 
-        if (fromMatch && toMatch) {
-            const [, x1, y1] = fromMatch;
-            const [, x2, y2] = toMatch;
-            return {
-                type: 'gcode',
-                response: `Here's a line from (${x1}, ${y1}) to (${x2}, ${y2}):\n\n\`\`\`gcode\n${GCODE_CACHE.line(x1, y1, x2, y2)}\n\`\`\``
-            };
-        } else {
-            return {
-                type: 'clarify',
-                response: `I can create a line for you!\n\n**Please provide:**\n1. Start point (X, Y)\n2. End point (X, Y)\n\nExample: "line from 0,0 to 50,50"`
-            };
-        }
+        if (fromMatch) { x1 = parseFloat(fromMatch[1]); y1 = parseFloat(fromMatch[2]); }
+        if (toMatch) { x2 = parseFloat(toMatch[1]); y2 = parseFloat(toMatch[2]); }
+
+        return {
+            response: `Line created! From (${x1}, ${y1}) to (${x2}, ${y2})\n\n\`\`\`gcode\n${GCODE.line(x1, y1, x2, y2)}\n\`\`\``
+        };
     }
 
-    // ===== G-CODE EXPLANATIONS =====
-    for (const [code, explanation] of Object.entries(GCODE_EXPLANATIONS)) {
-        if (lower.includes(code) && (lower.includes('what') || lower.includes('explain') || lower.includes('mean'))) {
-            return { type: 'explanation', response: explanation };
-        }
-    }
+    // ===== EXPLANATIONS =====
+    if (lower.includes('g0')) return { response: '**G0** = Rapid move (fast, non-cutting). Example: `G0 X10 Y20`' };
+    if (lower.includes('g1')) return { response: '**G1** = Linear cut/draw move. Example: `G1 X30 Y40 F400`' };
+    if (lower.includes('what') && lower.includes('z')) return { response: '**Z axis**: Z5 = pen up, Z-1 = pen down' };
 
-    // ===== FEED RATE =====
-    if (lower.includes('feed') && lower.includes('rate')) {
-        const feedMatch = lower.match(/(\d+)/);
-        if (feedMatch) {
-            return {
-                type: 'info',
-                response: `To change feed rate to ${feedMatch[1]}mm/min, replace all \`F\` values with \`F${feedMatch[1]}\`.\n\nExample: \`G1 X50 Y50 F${feedMatch[1]}\``
-            };
-        } else {
-            return {
-                type: 'clarify',
-                response: `**What feed rate would you like?** Please specify in mm/min.\n\nTypical values:\n- 200-400: Fine detail/pen plotting\n- 500-1000: General cutting\n- 1000+: Fast roughing`
-            };
-        }
+    // ===== HELP =====
+    if (lower.includes('help')) {
+        return {
+            response: `**Quick commands:**\n- "circle 8cm" or "circle radius 20"\n- "rectangle 50x30"\n- "square 40mm"\n- "line from 0,0 to 50,50"`
+        };
     }
 
     return null;
@@ -183,7 +144,6 @@ function matchCachedPattern(message) {
 
 export default {
     async fetch(request, env) {
-        // Handle CORS preflight
         if (request.method === 'OPTIONS') {
             return new Response(null, {
                 headers: {
@@ -199,14 +159,14 @@ export default {
         }
 
         try {
-            const { message, currentGcode } = await request.json();
+            const { message } = await request.json();
 
-            // ===== CAG: Try cached/conversational response first =====
-            const cachedResponse = matchCachedPattern(message);
-            if (cachedResponse) {
+            // Try simple pattern matching first
+            const result = processMessage(message);
+            if (result) {
                 return new Response(JSON.stringify({
                     success: true,
-                    response: cachedResponse.response,
+                    response: result.response,
                     cached: true
                 }), {
                     headers: {
@@ -216,28 +176,23 @@ export default {
                 });
             }
 
-            // ===== Fall back to LLM for complex queries =====
-            const systemPrompt = `You are a helpful G-code assistant for CNC machines and pen plotters.
+            // Fallback to LLM - but with strict instructions
+            const systemPrompt = `You are a G-code assistant. Be BRIEF and DIRECT.
 
-IMPORTANT RULES:
-1. If the user's request is unclear or missing information, ASK CLARIFYING QUESTIONS. Do NOT guess or assume.
-2. Common things to clarify: position, size, dimensions, feed rate
-3. When you have all needed info, generate G-code with:
-   - G21 for millimeters
-   - G90 for absolute positioning  
-   - G0 Z5 for pen up, G0 Z-1 for pen down
-   - F400 for feed rate (unless specified)
-4. Wrap G-code in \`\`\`gcode blocks
-5. Keep responses concise
-
-Current G-code context: ${currentGcode ? currentGcode.substring(0, 300) : 'None loaded'}`;
+RULES:
+1. If user asks for a shape, GENERATE THE G-CODE IMMEDIATELY with sensible defaults
+2. Do NOT ask for confirmation
+3. Use: G21 (mm), G90 (absolute), G0 Z5 (up), G0 Z-1 (down), F400 (feed)
+4. Default center: (50, 50), Default size: 20mm
+5. Wrap G-code in \`\`\`gcode blocks
+6. Keep response under 100 words`;
 
             const response = await env.AI.run('@cf/meta/llama-2-7b-chat-int8', {
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: message }
                 ],
-                max_tokens: 512,
+                max_tokens: 400,
             });
 
             return new Response(JSON.stringify({
