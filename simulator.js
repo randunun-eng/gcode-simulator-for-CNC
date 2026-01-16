@@ -887,8 +887,8 @@ M30         ; Program end
         this.chatToggle = document.getElementById('chatToggle');
         this.chatHeader = document.getElementById('chatHeader');
 
-        // API endpoint - update this after deploying worker
-        this.aiEndpoint = 'https://gcode-ai-assistant.<YOUR-SUBDOMAIN>.workers.dev';
+        // API endpoint for AI assistant
+        this.aiEndpoint = 'https://gcode-simulator.randunun.workers.dev';
 
         // Start collapsed
         this.chatPanel.classList.add('collapsed');
